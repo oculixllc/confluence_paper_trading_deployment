@@ -1,0 +1,8 @@
+name = "confluence-paper-journal"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "confluence-paper-journal"
+database_id = "01f828b0-c29f-473c-9f7d-29f1f25a914a"
