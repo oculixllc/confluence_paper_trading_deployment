@@ -192,7 +192,7 @@ def reconcile_open_position(session, account_id, cfg, state):
     closed = get_closed_trade(session, account_id, pos["trade_id"])
     realized_pnl = float(closed.get("realizedPL", 0.0))
     close_time = closed.get("closeTime")
-    exit_price = float(closed.get("price", pos["entry_price"]))
+    exit_price = float(closed.get("averageClosePrice", pos["entry_price"]))
 
     ts = parse_oanda_time(close_time) if close_time else datetime.now(timezone.utc)
     balance = get_account_balance(session, account_id)
