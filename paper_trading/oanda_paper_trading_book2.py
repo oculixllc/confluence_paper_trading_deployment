@@ -273,8 +273,8 @@ def try_open_position(session, account_id, cfg, df_ind, state):
     state["position"] = {
         "direction": signal["direction"], "entry_price": entry_price,
         "stop_price": stop_price, "target_price": target_price,
-        "lots": lots, "score": signal["score"], "trade_id": trade_id,
-        "entry_time": latest_time.isoformat(),
+        "lots": lots, "score": signal["score"], "components": signal["components"],
+        "trade_id": trade_id, "entry_time": latest_time.isoformat(),
     }
     log_event({"event": "position_opened", **state["position"]})
     return state

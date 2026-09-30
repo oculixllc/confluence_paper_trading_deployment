@@ -36,7 +36,7 @@ def build_journal(events):
         if e.get("event") == "position_opened":
             trades[e["trade_id"]] = {
                 "trade_id": e["trade_id"], "entry_time": e.get("entry_time"),
-                "direction": e.get("direction"), "setup_score": e.get("score"),
+                "direction": e.get("direction"), "setup_score": e.get("score"), "score_components": e.get("components"),
                 "entry_price": e.get("entry_price"), "stop_price": e.get("stop_price"),
                 "target_price": e.get("target_price"), "lots": e.get("lots"),
                 "exit_time": None, "exit_price": None, "realized_pnl": None,
@@ -89,12 +89,23 @@ def print_summary(rows):
     print("=" * 100)
 
 
+def format_factors(components):
+    if not components:
+        return "--"
+    labels = {"chart_pattern": "pattern", "candle": "candle", "volume": "vol",
+              "vwap": "vwap", "vol_profile": "vp"}
+    parts = [f"{label}+{components[k]}" for k, label in labels.items() if components.get(k)]
+    if components.get("mtf_penalty"):
+        parts.append(f"mtf-{components['mtf_penalty']}")
+    return " ".join(parts) or "--"
+
+
 def print_table(rows):
-    header = f"{'entry_time':<26}{'dir':<7}{'score':>6}{'entry':>10}{'stop':>10}{'target':>10}{'exit':>10}{'rr_plan':>9}{'rr_act':>8}{'pnl':>9}  status"
+    header = f"{'entry_time':<26}{'dir':<7}{'score':>6}  {'factors':<44}{'entry':>10}{'stop':>10}{'target':>10}{'exit':>10}{'rr_plan':>9}{'rr_act':>8}{'pnl':>9}  status"
     print(header)
     for r in rows:
         print(
-            f"{(r['entry_time'] or '')[:25]:<26}{(r['direction'] or ''):<7}{r['setup_score'] or 0:>6}"
+            f"{(r['entry_time'] or '')[:25]:<26}{(r['direction'] or ''):<7}{r['setup_score'] or 0:>6}  {format_factors(r['score_components']):<44}"
             f"{r['entry_price'] or 0:>10.5f}{r['stop_price'] or 0:>10.5f}{r['target_price'] or 0:>10.5f}"
             f"{(r['exit_price'] or 0):>10.5f}{(r['rr_planned'] or 0):>9.2f}{(r['rr_actual'] or 0):>8.2f}"
             f"{(r['realized_pnl'] or 0):>9.2f}  {r['status']}"
@@ -126,7 +137,7 @@ def main():
         with open(args.out, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows({**r, "score_components": json.dumps(r["score_components"])} for r in rows)
         print(f"\nSaved CSV to {args.out}")
 
 

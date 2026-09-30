@@ -55,14 +55,15 @@ async function handleEvent(request, env) {
 
   if (event === "position_opened") {
     await env.DB.prepare(
-      `INSERT INTO trades (trade_id, entry_time, direction, setup_score, entry_price, stop_price, target_price, lots, rr_planned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO trades (trade_id, entry_time, direction, setup_score, score_components, entry_price, stop_price, target_price, lots, rr_planned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(trade_id) DO UPDATE SET
-         entry_time=excluded.entry_time, direction=excluded.direction, setup_score=excluded.setup_score,
+         entry_time=excluded.entry_time, direction=excluded.direction, setup_score=excluded.setup_score, score_components=excluded.score_components,
          entry_price=excluded.entry_price, stop_price=excluded.stop_price, target_price=excluded.target_price,
          lots=excluded.lots, rr_planned=excluded.rr_planned`
     ).bind(
       payload.trade_id, payload.entry_time, payload.direction, payload.score,
+      payload.components ? JSON.stringify(payload.components) : null,
       payload.entry_price, payload.stop_price, payload.target_price, payload.lots,
       payload.stop_price && payload.entry_price && payload.target_price
         ? Math.abs((payload.target_price - payload.entry_price) / (payload.entry_price - payload.stop_price))
@@ -114,7 +115,9 @@ async function getJournal(env) {
       const realizedDist = t.direction === "long" ? t.exit_price - t.entry_price : t.entry_price - t.exit_price;
       rrActual = riskDist ? +(realizedDist / riskDist).toFixed(2) : null;
     }
-    return { ...t, status: closed ? (t.realized_pnl > 0 ? "win" : t.realized_pnl < 0 ? "loss" : "flat") : "open", rr_actual: rrActual };
+    let components = null;
+    try { components = t.score_components ? JSON.parse(t.score_components) : null; } catch (_) {}
+    return { ...t, score_components: components, status: closed ? (t.realized_pnl > 0 ? "win" : t.realized_pnl < 0 ? "loss" : "flat") : "open", rr_actual: rrActual };
   });
 
   const totalClosed = wins + losses;
@@ -197,6 +200,9 @@ const DASHBOARD_HTML = `<!doctype html>
   section { margin-top: 32px; }
   h2 { font-size: 15px; font-weight: 500; margin: 0 0 4px; }
   #chartWrap { position: relative; height: 220px; margin-top: 12px; }
+  .factors { font-size: 12px; white-space: nowrap; } .factors .f { display: inline-block; padding: 1px 6px; margin: 1px 2px 1px 0; border-radius: 4px; background: #eeece5; color: #3a3935; }
+  .factors .f.pen { background: #fbe8e6; color: #a02e21; }
+  @media (prefers-color-scheme: dark) { .factors .f { background: #2a2926; color: #d8d6cf; } .factors .f.pen { background: #3a1f1c; color: #f0a59b; } }
   .empty { padding: 24px; text-align: center; color: #6b6a64; font-size: 13px; }
 </style>
 </head>
@@ -266,18 +272,28 @@ async function load() {
     document.getElementById('chartWrap').innerHTML = '<div class="empty">No equity snapshots yet -- accumulates as trades close.</div>';
   }
 
+  const FACTOR_LABELS = { chart_pattern: 'Pattern', candle: 'Candle', volume: 'Volume', vwap: 'VWAP', vol_profile: 'Vol profile' };
+  const fmtFactors = (c) => {
+    if (!c) return '--';
+    const chips = Object.entries(FACTOR_LABELS)
+      .filter(([k]) => c[k] > 0)
+      .map(([k, label]) => '<span class="f">' + label + ' +' + c[k] + '</span>');
+    if (c.mtf_penalty > 0) chips.push('<span class="f pen">MTF -' + c.mtf_penalty + '</span>');
+    return chips.join('') || '--';
+  };
   const trades = journalRes.trades || [];
   const journalDiv = document.getElementById('journalTable');
   if (trades.length === 0) {
     journalDiv.innerHTML = '<div class="empty">No trades logged yet.</div>';
   } else {
     journalDiv.innerHTML = \`<table>
-      <tr><th>Entry time</th><th>Dir</th><th>Score</th><th>Entry</th><th>Stop</th><th>Target</th>
+      <tr><th>Entry time</th><th>Dir</th><th>Score</th><th>Factors</th><th>Entry</th><th>Stop</th><th>Target</th>
           <th>Exit</th><th>R:R planned</th><th>R:R actual</th><th>PnL</th><th>Status</th></tr>
       \${trades.map(t => \`<tr>
         <td>\${t.entry_time ? new Date(t.entry_time).toLocaleString() : '--'}</td>
         <td>\${t.direction || '--'}</td>
         <td>\${t.setup_score ?? '--'}</td>
+        <td class="factors">\${fmtFactors(t.score_components)}</td>
         <td>\${t.entry_price ?? '--'}</td>
         <td>\${t.stop_price ?? '--'}</td>
         <td>\${t.target_price ?? '--'}</td>
