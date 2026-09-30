@@ -48,6 +48,11 @@ def build_journal(events):
             t["exit_time"] = e.get("close_time")
             t["exit_price"] = e.get("exit_price")
             t["realized_pnl"] = e.get("realized_pnl")
+        elif e.get("event") == "exit_price_corrected":
+            # Appended by the 2026-09-30 backfill; later events win, history is not rewritten.
+            t = trades.get(e["trade_id"])
+            if t is not None:
+                t["exit_price"] = e.get("exit_price")
 
     rows = []
     for t in trades.values():
