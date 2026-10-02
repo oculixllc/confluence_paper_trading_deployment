@@ -56,6 +56,7 @@ Do not move to a live account until all are met:
 
 1. **Config parity:** backtest and paper run on the same committed config (done 2026-10-02, see Change Log).
 2. **Backtest:** 24 months EUR/USD 15m, net of spread and slippage. Profit factor > 1.5, max drawdown < 20%, 100+ trades, with an out-of-sample split and a long/short regime split.
+   - Exit-variant comparison (fixed vs breakeven vs trailing, identical entries, long/short split): `python3 backtest_book2.py --csv <file> --compare --cost-pips 1.0`. Keep a variant only if it beats `baseline` on profit factor and drawdown in both directions; the live runner is unchanged until then.
 3. **Explain the 2026-08-21 sizing overshoot** ($11.08 loss on a score-9 trade).
 4. **Paper consistency:** 20+ paper trades whose results fall inside the backtest's range.
 5. **Live runner built** with kill-switch and daily loss limit (none exists; the repo has no live-endpoint code path).
