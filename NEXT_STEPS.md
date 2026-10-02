@@ -8,7 +8,7 @@ Track progress, decisions, and planned improvements for the Book 2 paper-trading
 **Account:** $1,000 starting capital  
 **Risk Per Trade:** 1% (recently fixed from 0.6%)  
 **Deployment:** 2026-07-30  
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-10-02
 
 ## Validation Milestones
 
@@ -25,8 +25,7 @@ Track progress, decisions, and planned improvements for the Book 2 paper-trading
 
 ### 📊 Phase 2: Backtest Validation (IN PROGRESS)
 
-- [ ] Run full historical backtest (24+ months of EUR/USD 15m data)
-  - Current blocker: Historical CSV data needs to be acquired/formatted
+- [ ] Run full historical backtest (24+ months of EUR/USD 15m data) -- in progress as of 2026-10-02
   - Once available: `python3 backtest_book2.py` should show:
     - Win rate on historical data
     - Profit factor (should be >1.5 to be viable)
@@ -35,31 +34,32 @@ Track progress, decisions, and planned improvements for the Book 2 paper-trading
 - [ ] Validate that 1% risk scaling is consistent across all score levels
 - [ ] Stress test with tick data (if available) to catch slippage edge cases
 
-### 🎯 Phase 3: Live Paper Trading Validation (PENDING)
+### 🎯 Phase 3: Live Paper Trading Validation (IN PROGRESS)
 
-**Start Date:** Monday 2026-08-05 (when forex market opens)
+**Started:** 2026-07-30. **Status as of 2026-10-02:** 7 closed trades, 5 wins (71.4%), profit factor 5.73, net +$79.76. Pace is roughly 0.8 trades/week, so 30 trades lands around spring 2027 without the backtest.
+
+Caveats on the current numbers:
+- n=7 gives a 95% win-rate interval of roughly 36-92% (break-even at 2R is 33%, before costs).
+- 4 of 5 wins are shorts during EUR/USD's fall from 1.169 to 1.133; longs are 1 win in 3. Possible regime dependence.
+- Practice-account fills are idealized; real spread/slippage will be worse.
+- 2026-08-21 loss was $11.08 (~1.09% of equity), above the 1% cap. Unexplained; see gate 3.
 
 Targets:
-- [ ] Complete 20+ trades over 4-6 weeks
-- [ ] Achieve win rate ≥50% (break-even at 2:1 R:R is ~33%)
-- [ ] Maintain daily loss <3% on any day
-- [ ] Confirm no trade exceeds 1% loss (validates position sizing)
-- [ ] Track and review any trade that breaks rules
+- [ ] Complete 20+ trades (30+ to graduate)
+- [ ] Win rate stays above 40% (50%+ target)
+- [ ] Daily loss under 3%
+- [ ] Zero trades exceed 1% loss (**currently violated once, 2026-08-21**)
 
-**Success criteria:**
-- Zero trades exceed 1% loss (position sizing is correct)
-- Win rate stays above 40% (not going backwards on live data)
-- No daily drawdown exceeds 3% (circuit breaker working)
+### 🚦 Go-live gates (added 2026-10-02)
 
-### 💰 Phase 4: Graduated to Live Trading (FUTURE)
+Do not move to a live account until all are met:
 
-Once paper trading validates:
-- [ ] Review 30+ trades and confirm edge still holds on live prices
-- [ ] Document decision to move to live account
-- [ ] Set up live Oanda account with $5,000 initial capital
-- [ ] Deploy live trading runner (different from paper runner, with safeguards)
-- [ ] Implement kill-switch and daily loss limit enforcement
-- [ ] Run parallel: live trading + paper trading for validation
+1. **Config parity:** backtest and paper run on the same committed config (done 2026-10-02, see Change Log).
+2. **Backtest:** 24 months EUR/USD 15m, net of spread and slippage. Profit factor > 1.5, max drawdown < 20%, 100+ trades, with an out-of-sample split and a long/short regime split.
+3. **Explain the 2026-08-21 sizing overshoot** ($11.08 loss on a score-9 trade).
+4. **Paper consistency:** 20+ paper trades whose results fall inside the backtest's range.
+5. **Live runner built** with kill-switch and daily loss limit (none exists; the repo has no live-endpoint code path).
+6. **Staged rollout:** smallest size, running alongside paper, before the planned $5,000.
 
 ## Feature Backlog
 
@@ -158,7 +158,11 @@ Once paper trading validates:
 | 2026-08-01 | Root cause analysis: score-based scaling reduced risk to 0.6% | ✅ Diagnosed |
 | 2026-08-01 | Fix: update config to risk 1% across all scores | ✅ Fixed |
 | 2026-08-01 | Reset backtest, waiting for forex market to open | ⏳ Pending |
-| TBD | Validate first 20+ trades with 1% risk | ⏳ Pending |
+| 2026-09-17 | Fix: exit_price read OANDA entry `price` instead of `averageClosePrice` (c427f68) | ✅ |
+| 2026-09-17 | Backfilled exit_price on the 6 earlier trades | ✅ |
+| 2026-10-02 | Committed server's 1.0 size_scale_by_score to repo (server was edited in place on 2026-08-01, never committed; repo still had 0.6/0.75/0.9/1.0) | ✅ |
+| 2026-10-02 | Added go-live gates; status refreshed (7 trades, PF 5.73) | ✅ |
+| TBD | Validate 20+ trades with 1% risk | ⏳ In progress |
 
 ## Related Docs
 

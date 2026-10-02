@@ -138,7 +138,13 @@ If the Cloudflare Worker dashboard isn't showing new trades:
 
 3. Check the Worker logs in Cloudflare console.
 
+## Deployment Note
+
+`/home/ubuntu/paper-trading` on the server is **not a git checkout**. Files are copied up by hand, so the server can drift from the repo (this happened with `size_scale_by_score` in Aug 2026). Before copying files up, diff the server against the repo first, and never overwrite the server's `confluence_engine_book2.py` without checking `size_scale_by_score`.
+
 ## Recent Changes
+
+**2026-10-02:** Committed the server's all-1.0 `size_scale_by_score` to the repo (repo had stale 0.6/0.75/0.9/1.0).
 
 **2026-08-01:** Fixed position sizing to risk exactly 1% per trade (no score-based scaling). Previously risked 0.6% on score-7 setups.
 

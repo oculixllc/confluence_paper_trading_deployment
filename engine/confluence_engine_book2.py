@@ -138,7 +138,7 @@ class Book2Config:
     stop_pips: float = 15.0
     min_reward_risk: float = 2.0
     size_scale_by_score: dict = field(default_factory=lambda: {
-        7: 0.6, 8: 0.75, 9: 0.9, 10: 1.0,
+        7: 1.0, 8: 1.0, 9: 1.0, 10: 1.0,
     })
 
     # --- Review trigger (reuses v1's validated thresholds; see
