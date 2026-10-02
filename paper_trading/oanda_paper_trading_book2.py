@@ -44,6 +44,7 @@ Suggested cron entry (every 15 min, 2 min after each bar close):
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -116,18 +117,52 @@ def parse_oanda_time(ts: str) -> datetime:
     return datetime.fromisoformat(ts)
 
 
+class OandaAPIError(RuntimeError):
+    def __init__(self, method, path, status_code, text):
+        super().__init__(f"Oanda {method} {path} failed [{status_code}]: {text}")
+        self.status_code = status_code
+
+
+# Statuses worth retrying: Oanda's practice API has returned 404 NO_SUCH_TRADE
+# for a closed trade for ~21h (2026-08-21) and intermittent 5xx.
+TRANSIENT_STATUSES = {404, 429, 500, 502, 503, 504}
+
+
 def oanda_get(session, path, params=None):
     resp = session.get(f"{OANDA_PRACTICE_URL}{path}", params=params, timeout=30)
     if resp.status_code != 200:
-        raise RuntimeError(f"Oanda GET {path} failed [{resp.status_code}]: {resp.text}")
+        raise OandaAPIError("GET", path, resp.status_code, resp.text)
     return resp.json()
 
 
 def oanda_post(session, path, body):
     resp = session.post(f"{OANDA_PRACTICE_URL}{path}", json=body, timeout=30)
     if resp.status_code not in (200, 201):
-        raise RuntimeError(f"Oanda POST {path} failed [{resp.status_code}]: {resp.text}")
+        raise OandaAPIError("POST", path, resp.status_code, resp.text)
     return resp.json()
+
+
+def oanda_put(session, path, body):
+    resp = session.put(f"{OANDA_PRACTICE_URL}{path}", json=body, timeout=30)
+    if resp.status_code not in (200, 201):
+        raise OandaAPIError("PUT", path, resp.status_code, resp.text)
+    return resp.json()
+
+
+def with_retry(fn, attempts=3, base_delay=2.0):
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except OandaAPIError as e:
+            if e.status_code not in TRANSIENT_STATUSES:
+                raise
+            last = e
+        except requests.RequestException as e:
+            last = e
+        if i < attempts - 1:
+            time.sleep(base_delay * 2 ** i)
+    raise last
 
 
 def fetch_recent_candles(session, count: int) -> pd.DataFrame:
@@ -158,13 +193,43 @@ def get_open_trades(session, account_id: str):
     return data.get("trades", [])
 
 
+def closed_trade_from_transactions(session, account_id: str, trade_id: str):
+    """Fallback when /trades/{id} is unavailable: rebuild the close from the
+    ORDER_FILL transaction that closed the trade. A trade's ID equals the ID
+    of the fill that opened it, so everything after it is searched."""
+    data = oanda_get(session, f"/v3/accounts/{account_id}/transactions/sinceid", {"id": trade_id})
+    pl, price, close_time = 0.0, None, None
+    for tx in data.get("transactions", []):
+        if tx.get("type") != "ORDER_FILL":
+            continue
+        for c in tx.get("tradesClosed") or []:
+            if c.get("tradeID") == trade_id:
+                pl += float(c.get("realizedPL", 0.0))
+                price = float(c.get("price", tx.get("price")))
+                close_time = tx.get("time")
+    if close_time is None:
+        raise RuntimeError(f"no closing fill found for trade {trade_id} in transaction history")
+    return {"realizedPL": pl, "averageClosePrice": price, "closeTime": close_time,
+            "_source": "transactions"}
+
+
 def get_closed_trade(session, account_id: str, trade_id: str):
-    data = oanda_get(session, f"/v3/accounts/{account_id}/trades/{trade_id}")
-    return data["trade"]
+    try:
+        return with_retry(lambda: oanda_get(session, f"/v3/accounts/{account_id}/trades/{trade_id}"))["trade"]
+    except (OandaAPIError, requests.RequestException) as primary:
+        try:
+            return closed_trade_from_transactions(session, account_id, trade_id)
+        except Exception as fallback:
+            raise RuntimeError(
+                f"closed-trade lookup failed for {trade_id}: primary={primary}; fallback={fallback}"
+            ) from primary
 
 
 def place_order(session, account_id: str, cfg: Book2Config, direction: str,
-                 lots: float, stop_price: float, target_price: float):
+                 lots: float, stop_distance: float):
+    # Stop is a distance from the actual fill (not an absolute price off the
+    # signal bar's close), so realized risk matches the position sizing.
+    # Take Profit has no distance option in Oanda's API; see attach_take_profit.
     units = int(round(lots * 100000))
     if direction == "short":
         units = -units
@@ -172,11 +237,21 @@ def place_order(session, account_id: str, cfg: Book2Config, direction: str,
         "order": {
             "type": "MARKET", "instrument": INSTRUMENT, "units": str(units),
             "timeInForce": "FOK", "positionFill": "DEFAULT",
-            "stopLossOnFill": {"price": f"{stop_price:.5f}"},
-            "takeProfitOnFill": {"price": f"{target_price:.5f}"},
+            "stopLossOnFill": {"distance": f"{stop_distance:.5f}"},
         }
     }
     return oanda_post(session, f"/v3/accounts/{account_id}/orders", body)
+
+
+def attach_take_profit(session, account_id: str, trade_id: str, target_price: float):
+    body = {"takeProfit": {"price": f"{target_price:.5f}", "timeInForce": "GTC"}}
+    return with_retry(lambda: oanda_put(
+        session, f"/v3/accounts/{account_id}/trades/{trade_id}/orders", body))
+
+
+def close_trade_at_market(session, account_id: str, trade_id: str):
+    return with_retry(lambda: oanda_put(
+        session, f"/v3/accounts/{account_id}/trades/{trade_id}/close", {"units": "ALL"}))
 
 
 def reconcile_open_position(session, account_id, cfg, state):
@@ -190,6 +265,9 @@ def reconcile_open_position(session, account_id, cfg, state):
         return state
 
     closed = get_closed_trade(session, account_id, pos["trade_id"])
+    if closed.get("_source"):
+        log_event({"event": "closed_trade_lookup_fallback", "trade_id": pos["trade_id"],
+                   "source": closed["_source"]})
     realized_pnl = float(closed.get("realizedPL", 0.0))
     close_time = closed.get("closeTime")
     exit_price = float(closed.get("averageClosePrice", pos["entry_price"]))
@@ -253,30 +331,48 @@ def try_open_position(session, account_id, cfg, df_ind, state):
     if lots <= 0:
         return state
 
-    entry_price = float(latest["Close"])
+    signal_price = float(latest["Close"])
     stop_distance = cfg.stop_pips * cfg.pip_size
     target_distance = stop_distance * cfg.min_reward_risk
-    if signal["direction"] == "long":
-        stop_price = entry_price - stop_distance
-        target_price = entry_price + target_distance
-    else:
-        stop_price = entry_price + stop_distance
-        target_price = entry_price - target_distance
 
-    order_result = place_order(session, account_id, cfg, signal["direction"], lots, stop_price, target_price)
+    order_result = place_order(session, account_id, cfg, signal["direction"], lots, stop_distance)
     fill = order_result.get("orderFillTransaction")
     if fill is None:
         log_event({"event": "order_not_filled", "order_result": order_result})
         return state
 
-    trade_id = fill.get("tradeOpened", {}).get("tradeID")
+    opened = fill.get("tradeOpened", {})
+    trade_id = opened.get("tradeID")
+    entry_price = float(opened.get("price", fill.get("price", signal_price)))
+    if signal["direction"] == "long":
+        stop_price = entry_price - stop_distance
+        target_price = entry_price + target_distance
+        adverse_slippage_pips = (entry_price - signal_price) / cfg.pip_size
+    else:
+        stop_price = entry_price + stop_distance
+        target_price = entry_price - target_distance
+        adverse_slippage_pips = (signal_price - entry_price) / cfg.pip_size
+
+    # Recorded before the Take Profit is attached so a failure below can never
+    # leave an open trade the runner doesn't know about.
     state["position"] = {
         "direction": signal["direction"], "entry_price": entry_price,
         "stop_price": stop_price, "target_price": target_price,
         "lots": lots, "score": signal["score"], "components": signal["components"],
         "trade_id": trade_id, "entry_time": latest_time.isoformat(),
+        "signal_price": signal_price, "adverse_slippage_pips": round(adverse_slippage_pips, 2),
     }
     log_event({"event": "position_opened", **state["position"]})
+
+    try:
+        attach_take_profit(session, account_id, trade_id, target_price)
+    except Exception as e:
+        # Stop is already live, so loss is bounded; without a target the trade
+        # would break the strategy's 2R exit, so flatten it. Reconcile records
+        # the close as a normal trade_closed on the next run.
+        log_event({"event": "take_profit_attach_failed", "trade_id": trade_id, "message": str(e)})
+        close_trade_at_market(session, account_id, trade_id)
+        log_event({"event": "closed_at_market_after_tp_failure", "trade_id": trade_id})
     return state
 
 
