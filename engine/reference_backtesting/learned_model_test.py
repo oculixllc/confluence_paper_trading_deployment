@@ -51,6 +51,17 @@ OTHER PAIRS (added before the USD/JPY run; nothing else changed)  The identical 
             1-day-average true range to EUR/USD's, measured from price data alone (USD/JPY: stop 17.5 pips on 15m).
             A model has a learnable edge on the pair only if L1, L2 and L3 hold there. The indicator suite is
             judged to carry a pair-independent edge only if it holds on EUR/USD AND on the second pair.
+
+ICHIMOKU SUITE (added before the run; nothing else changed)  --feature-set ichi tests the combination
+            ichimoku + VWAP + volume profile + price action, dropping the volume and chart-pattern features.
+            Ichimoku uses the standard 9/26/52-bar periods at every timeframe (a bar-count convention, so 15m, 30m
+            and 60m cover different clock time). The cloud at a bar is taken from values computed 26 bars earlier,
+            and the Chikou span is price versus price 26 bars ago, so nothing looks ahead. Features: distance beyond
+            the cloud in the trade direction, cloud thickness, colour of the cloud ahead, Tenkan-Kijun gap, price
+            versus Kijun and Tenkan, Chikou, and a Tenkan/Kijun cross. Tested on EUR/USD and USD/JPY at 15m, 30m
+            and 60m with the same models and the same L1/L2/L3 rules. A suite counts as having a learnable edge only
+            if the same model passes at the same timeframe on BOTH pairs (replication across pairs is the guard
+            against a lucky pass in this larger set of runs).
 """
 import argparse
 import json
@@ -67,7 +78,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.dirname(HERE), HERE]
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument("--tf", type=int, choices=[15, 30], required=True)
+ap.add_argument("--tf", type=int, choices=[15, 30, 60], required=True)
+ap.add_argument("--feature-set", choices=["book", "ichi"], default="book")
 ap.add_argument("--csv15-old", default="eur_usd_15m_2013-01_to_2023-09.csv")
 ap.add_argument("--csv15-new", default="eur_usd_15m_2023-10_to_2026-10.csv")
 ap.add_argument("--csv15", nargs="+", default=None, help="15m CSV file(s) in time order; overrides --csv15-old/--csv15-new")
@@ -111,8 +123,8 @@ d15 = d15[~d15.index.duplicated()]
 if TF == 15:
     df = d15
 else:
-    g = d15.resample("30min", label="left", closed="left")
-    df = g.agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})[g["Close"].count() >= 2]
+    g = d15.resample(f"{TF}min", label="left", closed="left")
+    df = g.agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})[g["Close"].count() >= max(2, TF // 15 - 1)]
 log(f"{len(df)} bars | stop {STOP_P} pips, horizon {HORIZON}")
 ind = compute_indicators_book2(df, cfg)
 n = len(ind)
@@ -175,6 +187,16 @@ er = (c_ - c_.shift(ER_N)).abs() / c_.diff().abs().rolling(ER_N).sum()
 upper, lower = h_ - np.maximum(o_, c_), np.minimum(o_, c_) - l_
 vstd = ind["vwap_std"].replace(0, np.nan)
 f = lambda s: s.astype(float)  # noqa: E731
+ICHI = args.feature_set == "ichi"
+if ICHI:
+    tenkan = (h_.rolling(9).max() + l_.rolling(9).min()) / 2
+    kijun = (h_.rolling(26).max() + l_.rolling(26).min()) / 2
+    a_now = (tenkan + kijun) / 2
+    b_now = (h_.rolling(52).max() + l_.rolling(52).min()) / 2
+    span_a, span_b = a_now.shift(26), b_now.shift(26)
+    cloud_top, cloud_bot = np.maximum(span_a, span_b), np.minimum(span_a, span_b)
+    tk_up = ((tenkan > kijun) & (tenkan.shift() <= kijun.shift())).astype(float)
+    tk_dn = ((tenkan < kijun) & (tenkan.shift() >= kijun.shift())).astype(float)
 
 
 def features(d):
@@ -200,6 +222,15 @@ def features(d):
         "chart_grade_opposite": pick("chart_pattern_grade_short", "chart_pattern_grade_long"),
         "atr_log": np.log(atr / P), "direction": float(d),
     })
+    if ICHI:
+        X["ichi_cloud_dist"] = ((c_ - cloud_top) if long_ else (cloud_bot - c_)) / atr
+        X["ichi_cloud_thickness"] = (cloud_top - cloud_bot) / atr
+        X["ichi_future_cloud"] = d * (a_now - b_now) / atr
+        X["ichi_tenkan_kijun"] = d * (tenkan - kijun) / atr
+        X["ichi_price_kijun"] = d * (c_ - kijun) / atr
+        X["ichi_price_tenkan"] = d * (c_ - tenkan) / atr
+        X["ichi_chikou"] = d * (c_ - c_.shift(26)) / atr
+        X["ichi_tk_cross"] = tk_up if long_ else tk_dn
     return X.iloc[idx_all].reset_index(drop=True).astype("float32")
 
 
@@ -212,8 +243,14 @@ GROUPS = {
                               "candle_hammer", "candle_doji", "ob_fvg_combined"],
     "chart pattern": ["chart_grade", "chart_grade_opposite"],
     "context": ["atr_log", "direction"],
+    "ichimoku": ["ichi_cloud_dist", "ichi_cloud_thickness", "ichi_future_cloud", "ichi_tenkan_kijun", "ichi_price_kijun",
+                 "ichi_price_tenkan", "ichi_chikou", "ichi_tk_cross"],
 }
-EXPECT_POSITIVE = ["trend_dist", "vwap_reclaim_or_fail", "candle_reversal", "chart_grade", "ob_fvg_combined", "vp_at_level"]
+USED = ["ichimoku", "vwap", "volume profile", "candle / price action", "context"] if ICHI else \
+    ["trend", "vwap", "volume profile", "volume", "candle / price action", "chart pattern", "context"]
+GROUPS = {k: GROUPS[k] for k in USED}
+EXPECT_POSITIVE = (["ichi_cloud_dist", "ichi_tenkan_kijun", "ichi_chikou", "ichi_tk_cross", "vwap_reclaim_or_fail", "candle_reversal", "vp_at_level"]
+                   if ICHI else ["trend_dist", "vwap_reclaim_or_fail", "candle_reversal", "chart_grade", "ob_fvg_combined", "vp_at_level"])
 
 times = ind.index[idx_all]
 parts = []
@@ -449,5 +486,5 @@ for kind in ("logit", "hgb"):
     print(f"{kind:<6} L1 ranking (AUC>0.5 both splits): {'PASS' if l1 else 'FAIL'} | L2 selection (top 0.5% edge>0 both): {'PASS' if l2 else 'FAIL'} | "
           f"L3 tradeable (2-pip meanR>0): {'PASS' if l3 else 'FAIL'}  ->  {'LEARNABLE EDGE' if V[kind]['learnable'] else 'NO LEARNABLE EDGE'}")
 res["verdicts"] = V
-json.dump(res, open(os.path.join(args.out_dir, f"learned_{args.label}_tf{TF}_results.json"), "w"), indent=1, default=float)
+json.dump(res, open(os.path.join(args.out_dir, f"learned_{args.label}{'_ichi' if ICHI else ''}_tf{TF}_results.json"), "w"), indent=1, default=float)
 log("DONE")
