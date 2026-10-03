@@ -1,17 +1,20 @@
 """
 download_oanda_candles.py
 
-Downloads historical EUR/USD 15-minute candles (mid prices, with volume) from
-Oanda's practice API into the CSV layout backtest_confluence.load_data expects:
+Downloads historical candles (EUR_USD by default) (mid prices, with volume) from Oanda's
+practice API into the CSV layout backtest_confluence.load_data expects:
     time,Open,High,Low,Close,Volume     (time is UTC; load_data converts to New York)
 
-Uses the same instrument, granularity and price component (mid) as the live
-runner, so the backtest sees the same volume definition as paper trading.
+Uses the same instrument and price component (mid) as the live runner, so the
+backtest sees the same volume definition as paper trading. Rows are written to
+disk page by page, so memory stays flat even for millions of 5-minute bars.
 Read-only market-data requests; only OANDA_API_KEY is needed.
 
 Usage:
     export OANDA_API_KEY="your-practice-api-token"
     python3 download_oanda_candles.py --from 2023-10-01 --out eur_usd_15m.csv
+    python3 download_oanda_candles.py --from 2013-01-01 --granularity M5 --out eur_usd_5m.csv
+    python3 download_oanda_candles.py --from 2013-01-01 --instrument USD_JPY --out usd_jpy_15m.csv
 """
 
 import argparse
@@ -20,21 +23,19 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-import pandas as pd
 import requests
 
 OANDA_PRACTICE_URL = "https://api-fxpractice.oanda.com"
-INSTRUMENT = "EUR_USD"
-GRANULARITY = "M15"
 PAGE = 5000  # Oanda's maximum candles per request
-STEP = timedelta(minutes=15)
+STEPS = {"M5": timedelta(minutes=5), "M15": timedelta(minutes=15), "M30": timedelta(minutes=30)}
+HEADER = "time,Open,High,Low,Close,Volume\n"
 
 
-def fetch_page(session, start: datetime):
-    params = {"granularity": GRANULARITY, "price": "M", "count": PAGE,
+def fetch_page(session, instrument, granularity, start: datetime):
+    params = {"granularity": granularity, "price": "M", "count": PAGE,
               "from": start.strftime("%Y-%m-%dT%H:%M:%S.000000000Z")}
     for attempt in range(4):
-        resp = session.get(f"{OANDA_PRACTICE_URL}/v3/instruments/{INSTRUMENT}/candles",
+        resp = session.get(f"{OANDA_PRACTICE_URL}/v3/instruments/{instrument}/candles",
                            params=params, timeout=60)
         if resp.status_code == 200:
             return resp.json().get("candles", [])
@@ -49,35 +50,39 @@ def parse_time(ts: str) -> datetime:
     return datetime.fromisoformat(head).replace(tzinfo=timezone.utc)
 
 
-def download(session, start: datetime, end: datetime):
-    rows, cursor = [], start
+def download(session, instrument, granularity, start: datetime, end: datetime, out):
+    step = STEPS[granularity]
+    cursor, written, last_written = start, 0, None
+    out.write(HEADER)
     while cursor < end:
-        candles = fetch_page(session, cursor)
+        candles = fetch_page(session, instrument, granularity, cursor)
         if not candles:
             break
         last = cursor
         for c in candles:
             t = parse_time(c["time"])
             last = max(last, t)
-            if not c.get("complete", True) or t >= end:
+            if not c.get("complete", True) or t >= end or (last_written is not None and t <= last_written):
                 continue
             m = c["mid"]
-            rows.append({"time": t.strftime("%Y-%m-%d %H:%M:%S+00:00"),
-                         "Open": float(m["o"]), "High": float(m["h"]),
-                         "Low": float(m["l"]), "Close": float(m["c"]),
-                         "Volume": int(c["volume"])})
-        print(f"  ...through {last.isoformat()}  ({len(rows)} candles)", file=sys.stderr)
-        if last + STEP <= cursor:
+            out.write(f"{t.strftime('%Y-%m-%d %H:%M:%S+00:00')},{float(m['o'])},{float(m['h'])},"
+                      f"{float(m['l'])},{float(m['c'])},{int(c['volume'])}\n")
+            written, last_written = written + 1, t
+        out.flush()
+        print(f"  ...through {last.isoformat()}  ({written} candles)", file=sys.stderr, flush=True)
+        if last + step <= cursor:
             break
-        cursor = last + STEP
+        cursor = last + step
         time.sleep(0.3)
-    return rows
+    return written, last_written
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--from", dest="start", required=True, help="UTC start date, YYYY-MM-DD")
     parser.add_argument("--to", dest="end", default=None, help="UTC end date (exclusive); default now")
+    parser.add_argument("--granularity", default="M15", choices=sorted(STEPS))
+    parser.add_argument("--instrument", default="EUR_USD", help="Oanda instrument, e.g. EUR_USD, USD_JPY")
     parser.add_argument("--out", default="eur_usd_15m.csv")
     args = parser.parse_args()
 
@@ -93,10 +98,9 @@ def main():
     session = requests.Session()
     session.headers.update({"Authorization": f"Bearer {api_key}"})
 
-    rows = download(session, start, end)
-    df = pd.DataFrame(rows).drop_duplicates("time").sort_values("time")
-    df.to_csv(args.out, index=False)
-    print(f"Wrote {len(df)} candles {df['time'].iloc[0]} -> {df['time'].iloc[-1]} to {args.out}")
+    with open(args.out, "w") as out:
+        written, last = download(session, args.instrument, args.granularity, start, end, out)
+    print(f"Wrote {written} {args.granularity} candles through {last} to {args.out}")
 
 
 if __name__ == "__main__":
