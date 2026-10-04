@@ -51,6 +51,8 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+import bot_control
+
 from confluence_engine_book2 import (
     Book2Config, compute_indicators_book2, evaluate_signal_book2, position_size_book2,
 )
@@ -389,14 +391,33 @@ def main():
     cfg = Book2Config()
     state = load_state()
 
+    # Journal control panel (Test 1): start/stop only. Parameters stay locked in Book2Config so this
+    # validation run is unmodified. With DASHBOARD_URL unset this returns enabled=True and nothing changes.
+    ctrl, ctrl_source = bot_control.fetch_config("book2", Path("."), default_enabled=True)
+
     try:
+        log_event({"event": "heartbeat", "bot_id": "book2", "enabled": ctrl["enabled"], "config_source": ctrl_source})
         state = reconcile_open_position(session, account_id, cfg, state)
+
+        if ctrl["flatten_requested"]:
+            if state["position"] is not None:
+                close_trade_at_market(session, account_id, state["position"]["trade_id"])
+                log_event({"event": "flattened_by_control_panel", "trade_id": state["position"]["trade_id"]})
+                # reconcile_open_position records the close as a normal trade_closed on the next run
+            bot_control.ack_flatten("book2")
+            return
 
         df = fetch_recent_candles(session, CANDLES_NEEDED)
         latest_bar_time = df.index[-1].isoformat()
         if state.get("last_processed_bar") == latest_bar_time:
             log_event({"event": "no_new_bar", "bar_time": latest_bar_time})
             save_state(state)
+            return
+
+        if not ctrl["enabled"]:
+            # Paused: no new entries. The bar is marked processed so resuming never trades a stale signal.
+            log_event({"event": "skipped_entry", "reason": "paused_by_control_panel", "bar_time": latest_bar_time})
+            state["last_processed_bar"] = latest_bar_time
             return
 
         df_ind = compute_indicators_book2(df, cfg)
