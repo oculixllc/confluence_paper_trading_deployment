@@ -98,7 +98,7 @@ wrangler deploy
 Then on the server (flattened directory): copy `bot_control.py` FIRST, then the updated
 `oanda_paper_trading_book2.py` (it imports `bot_control`), `confluence_setups.py`,
 `oanda_paper_trading_setups.py`. Add a second cron entry for Test 2 with
-`OANDA_ACCOUNT_ID=101-001-20779621-002` (the practice sub-account) and the same `DASHBOARD_URL` /
+`OANDA_ACCOUNT_ID=101-001-39749670-002` (the practice sub-account) and the same `DASHBOARD_URL` /
 `DASHBOARD_TOKEN`. Press **Start** on Test 2 in the dashboard when ready.
 
 Runner behaviour if the dashboard is unreachable: last fetched settings keep applying (a paused bot stays

@@ -12,7 +12,7 @@ Run only while the market is open, and only when the account has no open trades 
 Usage (on the server, from the runner's directory):
     cd /home/ubuntu/paper-trading
     set -a; source .env; set +a
-    OANDA_ACCOUNT_ID=101-001-20779621-002 venv/bin/python3 smoke_test_setups.py
+    OANDA_ACCOUNT_ID=101-001-39749670-002 venv/bin/python3 smoke_test_setups.py
     optional: INSTRUMENTS=EUR_USD  (default EUR_USD,USD_JPY)
 """
 
