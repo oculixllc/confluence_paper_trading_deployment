@@ -20,7 +20,7 @@ every trade is logged with the settings it used.
 
 Setup:
     export OANDA_API_KEY="<practice token>"
-    export OANDA_ACCOUNT_ID="101-001-20779621-002"
+    export OANDA_ACCOUNT_ID="101-001-39749670-002"
     export DASHBOARD_URL=... DASHBOARD_TOKEN=...          # same as the Book 2 runner
     optional: INSTRUMENTS=EUR_USD,USD_JPY  BOT_ID=setups
 Cron (every 15 min, 2 min after the bar close), run from the flattened deployment directory:
