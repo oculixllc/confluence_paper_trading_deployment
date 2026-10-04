@@ -138,6 +138,44 @@ If the Cloudflare Worker dashboard isn't showing new trades:
 
 3. Check the Worker logs in Cloudflare console.
 
+## Journal Control Panel (Start/Stop) and ADMIN_TOKEN
+
+The journal Worker (`confluence-paper-journal.cold-breeze-4299.workers.dev`) shows two tests, Test 1 (Book 2) and
+Test 2 (3-setup bot), each with Start / Stop / Stop & close open trades. Those actions need the Worker secret
+`ADMIN_TOKEN`. If it is not set, the Worker refuses them (HTTP 503); a wrong or missing token gets HTTP 401.
+Reading the dashboard needs no token.
+
+**Set or rotate the token** (run from `dashboard/worker`; this generates a random token, copies it to your
+clipboard, and uploads it as the secret. The token is never printed):
+
+```bash
+cd dashboard/worker
+T=$(openssl rand -hex 32) && printf %s "$T" | pbcopy && printf %s "$T" | wrangler secret put ADMIN_TOKEN --name confluence-paper-journal && unset T
+```
+
+Then **paste the token into your password manager immediately**: nothing else stores it, and it is not recoverable.
+Running the command again replaces the old token (the old one stops working at once). `pbcopy` is macOS; on Linux
+use `xclip -selection clipboard` or print it once with `echo`.
+
+**Use it:** open the dashboard, paste the token into the "Admin token" box (kept for that browser tab only, in
+`sessionStorage`), then Start / Stop / Apply parameters.
+
+**Verify it is enforced** (both lines must print 401):
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "Content-Type: application/json" -d '{"bot_id":"book2","action":"stop"}' https://confluence-paper-journal.cold-breeze-4299.workers.dev/api/admin/bot
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "Content-Type: application/json" -H "Authorization: Bearer wrong" -d '{"bot_id":"book2","action":"stop"}' https://confluence-paper-journal.cold-breeze-4299.workers.dev/api/admin/bot
+```
+
+Notes:
+- `ADMIN_TOKEN` (browser -> start/stop/params) is a different secret from `INGEST_TOKEN` (runners -> journal; the
+  server's `.env` `DASHBOARD_TOKEN` must equal it). Rotating one does not affect the other.
+- Never put the token in the repo, in `.env` on the server, or in chat. The server runners never need it.
+- Stop = no new trades (open trades keep their stop/target). Stop & close = also closes open trades at market on
+  the runner's next pass (within ~15 min). Runners pick up changes on their next cron run, not instantly.
+- Test 1's parameters are locked by design; Test 2's risk % (max 1), target % and trailing stop % are editable,
+  and changing them after trades exist starts a new run with a fresh 30-day clock.
+
 ## Deployment Note
 
 `/home/ubuntu/paper-trading` on the server is **not a git checkout**. Files are copied up by hand, so the server can drift from the repo (this happened with `size_scale_by_score` in Aug 2026). Before copying files up, diff the server against the repo first, and never overwrite the server's `confluence_engine_book2.py` without checking `size_scale_by_score`.
