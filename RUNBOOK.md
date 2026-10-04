@@ -176,6 +176,23 @@ Notes:
 - Test 1's parameters are locked by design; Test 2's risk % (max 1), target % and trailing stop % are editable,
   and changing them after trades exist starts a new run with a fresh 30-day clock.
 
+## Test 2 (3-setup bot) server setup
+
+Files on the server (`/home/ubuntu/paper-trading`): `run_setups.sh` (cron wrapper; account
+`101-001-39749670-002`, `BOT_ID=setups`), `oanda_paper_trading_setups.py`, `confluence_setups.py`,
+`bot_control.py`, `smoke_test_setups.py`. The server's API token only sees `101-001-39749670-001` (Book 2)
+and `-002` (Test 2); other account numbers return HTTP 403.
+
+Test 2's cron line (`3,18,33,48 * * * * .../run_setups.sh >> cron_setups.log`) is added by
+`enable_setups_after_smoke.sh`, which a one-time cron entry (`13,43 21-23 4 10 *`, server time is UTC) runs after
+the forex market opens on Sun 2026-10-04. It runs the 1-unit smoke test and adds the line ONLY on PASS; on
+INCONCLUSIVE (market closed) it retries at the next slot; on FAIL it adds nothing, writes
+`enable_setups.failed` and refuses to retry. It never adds a duplicate and removes its own cron entry when done.
+Log: `enable_setups.log`; the outcome also appears in the dashboard's Test 2 recent activity.
+
+Check: `tail -20 /home/ubuntu/paper-trading/enable_setups.log` and `crontab -l`.
+To re-arm after a FAIL: fix the cause, `rm enable_setups.failed`, and run the script by hand.
+
 ## Deployment Note
 
 `/home/ubuntu/paper-trading` on the server is **not a git checkout**. Files are copied up by hand, so the server can drift from the repo (this happened with `size_scale_by_score` in Aug 2026). Before copying files up, diff the server against the repo first, and never overwrite the server's `confluence_engine_book2.py` without checking `size_scale_by_score`.
