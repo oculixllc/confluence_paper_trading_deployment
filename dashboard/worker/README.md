@@ -68,11 +68,44 @@ The second command should return JSON with `metrics` and `equity_curve` keys
 (empty is fine at this point) -- confirms the Worker, the D1 binding, and the
 ingest auth are all working before you start relying on it.
 
-## What this deliberately does NOT do
+## Two simultaneous tests + control panel
 
-No config-editing UI. Every `Book2Config` parameter still lives in
-`confluence_engine_book2.py`, unreachable from this dashboard. That's by
-design for now -- the point of this paper-trading run is to test the current,
-validated config unchanged; a config UI is an easy way to start tweaking mid-run
-and quietly invalidate that test. Revisit once the run has had a fair,
-unmodified stretch.
+The dashboard shows two tests, switched with the toggle at the top. Each has its own start/stop,
+equity curve, journal, events and filters:
+
+| | bot_id | What | Parameters |
+|---|---|---|---|
+| Test 1 | `book2` | Book 2 5-pillar engine (running since 2026-07-30) | **Locked** (start/stop only), so the validation run stays unmodified |
+| Test 2 | `setups` | 3-setup bot: ORB / Pullback / Reversal (`oanda_paper_trading_setups.py`) | Risk % (max 1), target %, trailing stop %. Starts **paused** |
+
+Filters (risk %, target %, trailing stop % profile, setup, instrument, run) show only trades taken with
+those settings; each trade stores the settings it used. Changing parameters after trades exist starts a
+new run (fresh 30-day clock) after a confirmation.
+
+### Deploy order (matters)
+
+```bash
+cd dashboard/worker
+# 1. back up, then migrate ONCE (not idempotent)
+wrangler d1 export confluence-paper-journal --remote --output=backup_$(date +%F).sql
+wrangler d1 execute confluence-paper-journal --remote --file=migrations/0002_bot_control.sql
+# 2. new secret for start/stop/params (INGEST_TOKEN already exists)
+wrangler secret put ADMIN_TOKEN
+# 3. deploy, then commit + push IMMEDIATELY (a deploy not pushed can be reverted by the next push elsewhere)
+wrangler deploy
+```
+
+Then on the server (flattened directory): copy `bot_control.py` FIRST, then the updated
+`oanda_paper_trading_book2.py` (it imports `bot_control`), `confluence_setups.py`,
+`oanda_paper_trading_setups.py`. Add a second cron entry for Test 2 with
+`OANDA_ACCOUNT_ID=101-001-20779621-002` (the practice sub-account) and the same `DASHBOARD_URL` /
+`DASHBOARD_TOKEN`. Press **Start** on Test 2 in the dashboard when ready.
+
+Runner behaviour if the dashboard is unreachable: last fetched settings keep applying (a paused bot stays
+paused). Open positions are only closed by an explicit "Stop & close open trades".
+
+### Security
+
+GET endpoints are open (read-only paper P&L), as before. Start/stop/parameter changes need `ADMIN_TOKEN`
+and fail closed if it is not set. Consider Cloudflare Access in front of the whole Worker.
+`POST /api/event` still skips its token check if `INGEST_TOKEN` is unset: set it.
